@@ -9,6 +9,8 @@ try {
 const express = require("express");
 const app = express();
 app.use(express.json());
+const cors = require("cors");
+app.use(cors());
 
 // ℹ️ Loads and applies global middleware (CORS, JSON parsing, etc.) for server configurations
 const config = require("./config")
