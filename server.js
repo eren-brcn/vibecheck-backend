@@ -8,6 +8,7 @@ try {
 // Imports Express (a Node.js framework for handling HTTP requests) and initializes the server
 const express = require("express");
 const app = express();
+app.use(express.json());
 
 // ℹ️ Loads and applies global middleware (CORS, JSON parsing, etc.) for server configurations
 const config = require("./config")
