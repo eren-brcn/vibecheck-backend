@@ -1,51 +1,75 @@
 const router = require("express").Router();
 const MeetupGroup = require("../models/MeetupGroup.model");
 
-// POST /api/groups - Create a new squad
-router.post("/", (req, res) => {
-  const { name, description, organiser } = req.body;
-
-  MeetupGroup.create({ name, description, organiser, members: [organiser] })
-    .then((newGroup) => {
-      console.log("Group created");
-      res.status(201).json(newGroup);
-    })
-    .catch((err) => {
-      console.log("Group creation error:", err);
-      res.status(500).json(err);
-    });
+// GET ALL GROUPS
+router.get("/", async (req, res) => {
+  try {
+    const allGroups = await MeetupGroup.find().populate("organiser members");
+    res.json(allGroups);
+  } catch (err) {
+    res.status(500).json({ error: "Could not fetch groups" });
+  }
 });
 
-// POST /api/groups/:groupId/join - Add user to group
-router.post("/:groupId/join", (req, res) => {
-  const { groupId } = req.params;
-  const { userId } = req.body;
+// JOIN GROUP
+router.post("/:groupId/join", async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const { userId } = req.body;
 
-  MeetupGroup.findByIdAndUpdate(groupId, { $addToSet: { members: userId } }, { new: true })
-    .then((updatedGroup) => {
-      console.log("User joined group");
-      res.json(updatedGroup);
-    })
-    .catch((err) => {
-      console.log("Join error:", err);
-      res.status(500).json(err);
-    });
+    const updatedGroup = await MeetupGroup.findByIdAndUpdate(
+      groupId,
+      { $addToSet: { members: userId } },
+      { new: true }
+    );
+    
+    res.json(updatedGroup);
+  } catch (err) {
+    res.status(500).json({ error: "Join failed" });
+  }
+});
+// LEAVE GROUP
+router.post("/:groupId/leave", async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const { userId } = req.body;
+
+    const updatedGroup = await MeetupGroup.findByIdAndUpdate(
+      groupId,
+      { $pull: { members: userId } },
+      { new: true }
+    );
+
+    res.json(updatedGroup);
+  } catch (err) {
+    res.status(500).json({ error: "Leave failed" });
+  }
 });
 
-// POST /api/groups/:groupId/leave - Remove user from group
-router.post("/:groupId/leave", (req, res) => {
-  const { groupId } = req.params;
-  const { userId } = req.body;
-
-  MeetupGroup.findByIdAndUpdate(groupId, { $pull: { members: userId } }, { new: true })
-    .then((updatedGroup) => {
-      console.log("User left group");
-      res.json(updatedGroup);
-    })
-    .catch((err) => {
-      console.log("Leave error:", err);
-      res.status(500).json(err);
-    });
+// UPDATE: Modify a group (e.g., name, description)
+router.put("/:groupId", async (req, res) => {
+  try {
+    const updatedGroup = await MeetupGroup.findByIdAndUpdate(
+      req.params.groupId, 
+      req.body, 
+      { new: true }
+    );
+    res.json(updatedGroup);
+  } catch (err) {
+    res.status(500).json({ error: "Update failed" });
+  }
 });
+
+// DELETE: Remove a group
+router.delete("/:groupId", async (req, res) => {
+  try {
+    await MeetupGroup.findByIdAndDelete(req.params.groupId);
+    res.json({ message: "Group deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ error: "Delete failed" });
+  }
+});
+
 
 module.exports = router;
+
