@@ -29,6 +29,11 @@ router.post("/signup", async (req, res) => {
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
+    const jwtSecret = process.env.JWT_SECRET || process.env.TOKEN_SECRET;
+
+    if (!jwtSecret) {
+      return res.status(500).json({ error: "JWT secret is not configured on the server" });
+    }
 
     const foundUser = await User.findOne({ email });
     if (!foundUser) {
@@ -40,7 +45,7 @@ router.post("/login", async (req, res) => {
       // Create the token
       const token = jwt.sign(
         { id: foundUser._id }, 
-        process.env.JWT_SECRET, 
+        jwtSecret,
         { expiresIn: "1h" }
       );
       // Return the token in the response
