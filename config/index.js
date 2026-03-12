@@ -9,13 +9,15 @@ const cors = require("cors");
 
 // Middleware configuration
 function config(app) {
+  const allowedOrigin = process.env.ORIGIN || "http://localhost:5173";
+
   // ℹ️ Enables Express to trust reverse proxies (e.g., when deployed behind services like Heroku or Vercel)
   app.set("trust proxy", 1);
   
   // ℹ️ Configures CORS to allow requests only from the specified origin
   app.use(
     cors({
-      origin: [process.env.ORIGIN]
+      origin: [allowedOrigin]
     })
   );
   

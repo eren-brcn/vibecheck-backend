@@ -80,4 +80,35 @@ router.get("/me", verifyToken, async (req, res) => {
   }
 });
 
+// UPDATE CURRENT USER PHOTO (Protected)
+router.put("/me/photo", verifyToken, async (req, res) => {
+  try {
+    const userId = req.payload?._id || req.payload?.id;
+    const { imageUrl } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({ message: "Invalid token payload" });
+    }
+
+    if (!imageUrl) {
+      return res.status(400).json({ message: "imageUrl is required" });
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { imageUrl },
+      { new: true }
+    ).select("-password");
+
+    if (!updatedUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.json(updatedUser);
+  } catch (err) {
+    console.error("/auth/me/photo error:", err);
+    res.status(500).json({ message: "Error updating profile photo" });
+  }
+});
+
 module.exports = router;
