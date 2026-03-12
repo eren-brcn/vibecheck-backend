@@ -17,6 +17,9 @@ function verifyToken(req, res, next) {
     }
 
     const payload = jwt.verify(token, secret);
+    if (!payload._id && payload.id) {
+      payload._id = payload.id;
+    }
     
     // we extract the payload from the token and pass it to the route inside the request.
     req.payload = payload;

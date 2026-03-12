@@ -2,6 +2,7 @@ const router = require("express").Router();
 const User = require("../models/User.model");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const { verifyToken } = require("../middlewares/auth.middlewares");
 
 // SIGNUP ROUTE
 router.post("/signup", async (req, res) => {
@@ -44,7 +45,7 @@ router.post("/login", async (req, res) => {
     if (isPasswordCorrect) {
       // Create the token
       const token = jwt.sign(
-        { id: foundUser._id }, 
+        { _id: foundUser._id, id: foundUser._id },
         jwtSecret,
         { expiresIn: "1h" }
       );
@@ -56,6 +57,26 @@ router.post("/login", async (req, res) => {
   } catch (err) {
     console.error("Login error:", err);
     res.status(500).json({ error: "Login error" });
+  }
+});
+
+// CURRENT USER ROUTE (Protected)
+router.get("/me", verifyToken, async (req, res) => {
+  try {
+    const userId = req.payload?._id || req.payload?.id;
+    if (!userId) {
+      return res.status(401).json({ message: "Invalid token payload" });
+    }
+
+    const user = await User.findById(userId).select("-password");
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.json(user);
+  } catch (err) {
+    console.error("/auth/me error:", err);
+    res.status(500).json({ message: "Error fetching current user" });
   }
 });
 

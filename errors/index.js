@@ -13,6 +13,19 @@ function handleErrors(app) {
     // always logs the error
     console.error("ERROR", req.method, req.path, err);
 
+    const cloudinaryError = err?.error || null;
+    const statusFromCloudinary = cloudinaryError?.http_code || err?.http_code;
+    const messageFromCloudinary = cloudinaryError?.message || err?.message;
+
+    if (!res.headersSent && statusFromCloudinary) {
+      const isAuthError = statusFromCloudinary === 401 || /signature|api_secret mismatch/i.test(messageFromCloudinary || '');
+      return res.status(statusFromCloudinary).json({
+        message: isAuthError
+          ? "Cloudinary authentication failed. Verify CLOUDINARY cloud name, API key, and API secret in server .env"
+          : messageFromCloudinary || "Cloudinary request failed"
+      });
+    }
+
     // Sends a generic server error response if headers haven't been sent
     if (!res.headersSent) {
       res

@@ -1,6 +1,6 @@
 // 1. Loads environment variables from a .env file into process.env
 // This MUST be the very first thing in your file to work properly
-require("dotenv").config();
+require("dotenv").config({ override: true });
 // 2. Imports Express (a Node.js framework for handling HTTP requests) and initializes the server
 const express = require("express");
 const app = express();
@@ -37,6 +37,9 @@ app.get("/", (req, res, next) => {
 // 7. Defines and applies route handlers
 const indexRouter = require("./routes/index.routes");
 app.use("/api", indexRouter);
+
+const uploadRoutes = require("./routes/upload.routes");
+app.use("/api/upload", uploadRoutes);
 
 // 8. Centralized error handling (must be placed after routes)
 const handleErrors = require("./errors");
