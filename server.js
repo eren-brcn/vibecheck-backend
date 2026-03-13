@@ -11,13 +11,27 @@ const app = express();
 app.use(express.json());
 const cors = require("cors");
 
-const CLIENT_ORIGIN = process.env.ORIGIN || "http://localhost:5173";
-app.use(cors({ origin: CLIENT_ORIGIN, credentials: true }));
+const allowedExact = new Set([
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "https://vibecheck-sigma-virid.vercel.app",
+    "https://vibecheck-git-main-eren-brcns-projects.vercel.app",
+    ...(process.env.ORIGIN ? [process.env.ORIGIN] : [])
+]);
+const allowedPreview = /^https:\/\/vibecheck-[a-z0-9-]+-eren-brcns-projects\.vercel\.app$/;
+
+const originChecker = (origin, cb) => {
+    if (!origin) return cb(null, true);
+    if (allowedExact.has(origin) || allowedPreview.test(origin)) return cb(null, true);
+    return cb(new Error("Not allowed by CORS"));
+};
+
+app.use(cors({ origin: originChecker, credentials: true }));
 
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
-        origin: CLIENT_ORIGIN,
+        origin: originChecker,
         methods: ["GET", "POST"]
     }
 });
