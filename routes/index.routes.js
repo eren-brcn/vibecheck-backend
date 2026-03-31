@@ -6,5 +6,6 @@ router.use("/auth", require("./auth.routes"));
 router.use("/groups", require("./group.routes"));
 router.use("/concerts", require("./concert.routes")); 
 router.use("/messages", require("./message.routes"));
+router.use("/users", require("./user.routes"));
 
 module.exports = router;

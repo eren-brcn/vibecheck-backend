@@ -1,11 +1,17 @@
 const router = require("express").Router();
+const crypto = require("crypto");
 const Group = require("../models/MeetupGroup.model");
 const { verifyToken } = require("../middlewares/auth.middlewares");
+
+const generateInviteCode = () => crypto.randomBytes(4).toString("hex").toUpperCase();
+
+const getUserIdFromPayload = (payload) => String(payload?._id || payload?.id || "").trim();
 
 // 1. GET ALL GROUPS (Public)
 router.get("/", async (req, res) => {
   try {
-    const allGroups = await Group.find().populate("organiser", "_id");
+    // Discover should list only public groups.
+    const allGroups = await Group.find({ isPrivate: { $ne: true } }).populate("organiser", "_id");
     res.json(allGroups);
   } catch (err) {
     res.status(500).json({ message: "Error fetching groups" });
@@ -15,7 +21,7 @@ router.get("/", async (req, res) => {
 // 2. GET USER'S JOINED GROUPS (Protected)
 router.get("/my-groups", verifyToken, async (req, res) => {
   try {
-    const userId = String(req.payload._id || req.payload.id);
+    const userId = getUserIdFromPayload(req.payload);
     const myGroups = await Group.find({
       $or: [{ members: userId }, { organiser: userId }]
     })
@@ -27,11 +33,26 @@ router.get("/my-groups", verifyToken, async (req, res) => {
   }
 });
 
-// 3. GET SINGLE GROUP WITH MEMBERS (Public)
-router.get("/:id", async (req, res) => {
+// 3. GET SINGLE GROUP WITH MEMBERS (Protected for private groups)
+router.get("/:id", verifyToken, async (req, res) => {
   try {
+    const currentUserId = getUserIdFromPayload(req.payload);
+    if (!currentUserId) {
+      return res.status(401).json({ message: "Invalid token payload" });
+    }
+
     const group = await Group.findById(req.params.id).populate("members", "username email imageUrl");
     if (!group) return res.status(404).json({ message: "Group not found" });
+
+    if (group.isPrivate) {
+      const organiserId = group.organiser ? String(group.organiser) : "";
+      const isOrganiser = organiserId === currentUserId;
+      const isMember = group.members.some((member) => String(member._id || member) === currentUserId);
+      if (!isOrganiser && !isMember) {
+        return res.status(403).json({ message: "This is a private group. Join with an invite code." });
+      }
+    }
+
     res.json(group);
   } catch (err) {
     res.status(500).json({ message: "Error fetching group" });
@@ -40,12 +61,15 @@ router.get("/:id", async (req, res) => {
 
 // 4. CREATE GROUP (Protected)
 router.post("/", verifyToken, async (req, res) => {
-  const { name, category, imageUrl } = req.body;
+  const { name, category, imageUrl, isPrivate } = req.body;
   try {
+    const privateGroup = Boolean(isPrivate);
     const newGroup = await Group.create({
       name,
       category,
       imageUrl,
+      isPrivate: privateGroup,
+      inviteCode: privateGroup ? generateInviteCode() : null,
       organiser: req.payload._id, // Set the creator as the organiser
       members: []
     });
@@ -58,12 +82,16 @@ router.post("/", verifyToken, async (req, res) => {
 // 5. JOIN GROUP (Protected)
 router.put("/join/:id", verifyToken, async (req, res) => {
   try {
-    const currentUserId = String(req.payload._id || req.payload.id);
+    const currentUserId = getUserIdFromPayload(req.payload);
     const group = await Group.findById(req.params.id);
     if (!group) return res.status(404).json({ message: "Group not found" });
 
     if (group.organiser && group.organiser.toString() === currentUserId) {
       return res.status(400).json({ message: "Organiser cannot join as a member" });
+    }
+
+    if (group.isPrivate) {
+      return res.status(403).json({ message: "This is a private group. Use an invite code to join." });
     }
 
     const updated = await Group.findByIdAndUpdate(
@@ -77,7 +105,38 @@ router.put("/join/:id", verifyToken, async (req, res) => {
   }
 });
 
-// 5. LEAVE GROUP (Protected)
+// 6. JOIN GROUP BY INVITE CODE (Protected)
+router.put("/join-by-invite", verifyToken, async (req, res) => {
+  try {
+    const currentUserId = getUserIdFromPayload(req.payload);
+    const inviteCode = String(req.body?.inviteCode || "").trim().toUpperCase();
+
+    if (!inviteCode) {
+      return res.status(400).json({ message: "Invite code is required" });
+    }
+
+    const group = await Group.findOne({ inviteCode, isPrivate: true });
+    if (!group) {
+      return res.status(404).json({ message: "Invalid invite code" });
+    }
+
+    if (group.organiser && String(group.organiser) === currentUserId) {
+      return res.status(400).json({ message: "You are already the organiser of this group" });
+    }
+
+    const updated = await Group.findByIdAndUpdate(
+      group._id,
+      { $addToSet: { members: currentUserId } },
+      { new: true }
+    );
+
+    res.json(updated);
+  } catch (err) {
+    res.status(400).json({ message: "Error joining with invite code" });
+  }
+});
+
+// 7. LEAVE GROUP (Protected)
 router.put("/leave/:id", verifyToken, async (req, res) => {
   try {
     const currentUserId = req.payload?._id || req.payload?.id;
@@ -110,7 +169,7 @@ router.put("/leave/:id", verifyToken, async (req, res) => {
   }
 });
 
-// 6. KICK MEMBER (Organizer Only)
+// 8. KICK MEMBER (Organizer Only)
 router.put("/kick/:groupId/:userId", verifyToken, async (req, res) => {
   const { groupId, userId } = req.params;
   try {
@@ -137,7 +196,7 @@ router.put("/kick/:groupId/:userId", verifyToken, async (req, res) => {
   }
 });
 
-// 7. DELETE ALL MY GROUPS (Organiser Only — bulk)
+// 9. DELETE ALL MY GROUPS (Organiser Only — bulk)
 router.delete("/mine/all", verifyToken, async (req, res) => {
   try {
     const userId = String(req.payload._id || req.payload.id);
@@ -148,7 +207,7 @@ router.delete("/mine/all", verifyToken, async (req, res) => {
   }
 });
 
-// 8. DELETE GROUP (Organizer Only)
+// 10. DELETE GROUP (Organizer Only)
 router.delete("/:id", verifyToken, async (req, res) => {
   try {
     const requesterId = String(req.payload._id || req.payload.id);

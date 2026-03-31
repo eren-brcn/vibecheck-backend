@@ -39,6 +39,11 @@ const io = new Server(server, {
 io.on("connection", (socket) => {
     console.log(`User Connected: ${socket.id}`);
 
+    socket.on("join-notifications", (userId) => {
+        socket.join(`notifications:${userId}`);
+        console.log(`User ${userId} joined notifications room: notifications:${userId}`);
+    });
+
     socket.on("join_room", (room) => {
         socket.join(room);
         console.log(`User with ID: ${socket.id} joined room: ${room}`);
@@ -75,17 +80,7 @@ io.on("connection", (socket) => {
 const config = require("./config");
 config(app);
 
-// 4. GET all concerts
-app.get('/api/concerts', async (req, res) => {
-    try {
-        const concerts = await db.collection('concerts').find().toArray();
-        res.json(concerts);
-    } catch (error) {
-        res.status(500).json({ message: "Error fetching concerts" });
-    }
-});
-
-// 5. Middleware that establishes a database connection. Ensures the connection is created on every request. Required for serverless deployments
+// 4. Middleware that establishes a database connection. Ensures the connection is created on every request. Required for serverless deployments
 app.use(async (req, res, next) => {
     await connectDB()
     next()
@@ -114,3 +109,5 @@ const PORT = process.env.PORT || 5005;
 server.listen(PORT, () => {
     console.log(`Server listening. Local access on http://localhost:${PORT}`);
 });
+
+module.exports = { io };

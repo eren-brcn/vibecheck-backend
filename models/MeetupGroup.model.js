@@ -9,7 +9,9 @@ const meetupGroupSchema = new Schema({
     type: String,
     enum: ["rock", "pop", "hip-hop", "jazz", "classical", "electronic", "other"]
   },
-  imageUrl: String 
+  imageUrl: String,
+  isPrivate: { type: Boolean, default: false },
+  inviteCode: { type: String, default: null }
 });
 
 meetupGroupSchema.virtual("organizer").get(function () {
