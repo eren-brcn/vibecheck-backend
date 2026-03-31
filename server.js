@@ -36,6 +36,9 @@ const io = new Server(server, {
     }
 });
 
+const socketInstance = require('./socket-instance');
+socketInstance.setIo(io);
+
 io.on("connection", (socket) => {
     console.log(`User Connected: ${socket.id}`);
 
@@ -109,5 +112,3 @@ const PORT = process.env.PORT || 5005;
 server.listen(PORT, () => {
     console.log(`Server listening. Local access on http://localhost:${PORT}`);
 });
-
-module.exports = { io };

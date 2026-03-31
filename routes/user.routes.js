@@ -2,7 +2,7 @@ const router = require("express").Router();
 const User = require("../models/User.model");
 const Group = require("../models/MeetupGroup.model");
 const { verifyToken } = require("../middlewares/auth.middlewares");
-const { io } = require("../server");
+const socketInstance = require("../socket-instance");
 
 const getUserIdFromPayload = (payload) => String(payload?._id || payload?.id || "").trim();
 
@@ -161,7 +161,7 @@ router.post("/:id/friend", verifyToken, async (req, res) => {
     await User.findByIdAndUpdate(currentUserId, { $addToSet: { sentFriendRequests: targetUserId } });
 
     // Emit socket event to target user
-    io.to(`notifications:${targetUserId}`).emit("friend-request:new", {
+    socketInstance.getIo()?.to(`notifications:${targetUserId}`).emit("friend-request:new", {
       _id: currentUserId,
       username: currentUser.username,
       imageUrl: currentUser.imageUrl,
@@ -201,7 +201,7 @@ router.post("/friend-requests/:requesterId/:action", verifyToken, async (req, re
       await User.findByIdAndUpdate(requesterId, { $addToSet: { friends: currentUserId } });
       
       // Emit socket event to requester
-      io.to(`notifications:${requesterId}`).emit("friend-request:accepted", {
+      socketInstance.getIo()?.to(`notifications:${requesterId}`).emit("friend-request:accepted", {
         userId: currentUserId,
         username: currentUser.username,
         imageUrl: currentUser.imageUrl,
@@ -211,7 +211,7 @@ router.post("/friend-requests/:requesterId/:action", verifyToken, async (req, re
     }
 
     // Emit socket event to requester for decline
-    io.to(`notifications:${requesterId}`).emit("friend-request:declined", {
+    socketInstance.getIo()?.to(`notifications:${requesterId}`).emit("friend-request:declined", {
       userId: currentUserId,
     });
 
@@ -273,11 +273,12 @@ router.post("/group-invites", verifyToken, async (req, res) => {
     });
 
     // Emit socket event to target user
-    io.to(`notifications:${targetUserId}`).emit("group-invite:new", {
+    socketInstance.getIo()?.to(`notifications:${targetUserId}`).emit("group-invite:new", {
       groupId: groupId,
       groupName: group.name,
       invitedBy: currentUserId,
       inviterName: currentUser.username,
+      inviterName: currentUser?.username,
     });
 
     res.json({ message: "Group invite sent" });
@@ -314,13 +315,13 @@ router.post("/group-invites/:inviteId/:action", verifyToken, async (req, res) =>
       await Group.findByIdAndUpdate(groupId, { $addToSet: { members: currentUserId } });
       
       // Emit socket event to inviter
-      io.to(`notifications:${inviterId}`).emit("group-invite:accepted", {
+      socketInstance.getIo()?.to(`notifications:${inviterId}`).emit("group-invite:accepted", {
         userId: currentUserId,
         groupId: groupId,
       });
     } else {
       // Emit socket event to inviter for decline
-      io.to(`notifications:${inviterId}`).emit("group-invite:declined", {
+      socketInstance.getIo()?.to(`notifications:${inviterId}`).emit("group-invite:declined", {
         userId: currentUserId,
         groupId: groupId,
       });
