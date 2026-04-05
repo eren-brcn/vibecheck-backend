@@ -4,6 +4,7 @@ const meetupGroupSchema = new Schema({
   name: String,
   description: String,
   organiser: { type: Schema.Types.ObjectId, ref: "User" },
+  moderators: [{ type: Schema.Types.ObjectId, ref: "User" }],
   members: [{ type: Schema.Types.ObjectId, ref: "User" }],
   category: {
     type: String,

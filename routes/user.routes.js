@@ -2,9 +2,24 @@ const router = require("express").Router();
 const User = require("../models/User.model");
 const Group = require("../models/MeetupGroup.model");
 const { verifyToken } = require("../middlewares/auth.middlewares");
+const { searchLimiter } = require("../middlewares/rate-limiters");
 const socketInstance = require("../socket-instance");
+const presenceStore = require("../presence-store");
 
 const getUserIdFromPayload = (payload) => String(payload?._id || payload?.id || "").trim();
+
+const maskEmail = (email) => {
+  if (typeof email !== "string") {
+    return email;
+  }
+
+  const [localPart, domainPart] = email.split("@");
+  if (!localPart || !domainPart) {
+    return email;
+  }
+
+  return `${localPart.slice(0, 2)}****@${domainPart}`;
+};
 
 const getFriendRequestStatus = (viewer, targetUserId) => {
   const isFriend = viewer.friends.some((id) => String(id) === targetUserId);
@@ -17,40 +32,240 @@ const getFriendRequestStatus = (viewer, targetUserId) => {
   return "none";
 };
 
+const appendNotification = async (userId, payload) => {
+  const title = String(payload?.title || "Notification").trim();
+  if (!title) {
+    return;
+  }
+
+  await User.findByIdAndUpdate(userId, {
+    $push: {
+      notificationHistory: {
+        $each: [{
+          type: payload?.type || "event",
+          title,
+          body: String(payload?.body || "").trim(),
+          createdAt: new Date()
+        }],
+        $position: 0,
+        $slice: 100
+      }
+    }
+  });
+};
+
+// GET USER SETTINGS (Protected)
+router.get("/settings", verifyToken, async (req, res) => {
+  try {
+    const currentUserId = getUserIdFromPayload(req.payload);
+    const user = await User.findById(currentUserId).select("settings");
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    return res.json(user.settings || {});
+  } catch (err) {
+    return res.status(500).json({ message: "Error fetching settings" });
+  }
+});
+
+// UPDATE USER SETTINGS (Protected)
+router.put("/settings", verifyToken, async (req, res) => {
+  try {
+    const currentUserId = getUserIdFromPayload(req.payload);
+    const allowedFields = [
+      "allowFriendRequests",
+      "allowMessagesFromFriends",
+      "allowMessagesFromEveryone",
+      "notifyOnFriendRequest",
+      "notifyOnMessage",
+      "notifyOnGroupInvite",
+      "theme"
+    ];
+
+    const settingsUpdate = {};
+    allowedFields.forEach((field) => {
+      if (Object.prototype.hasOwnProperty.call(req.body, field)) {
+        settingsUpdate[`settings.${field}`] = req.body[field];
+      }
+    });
+
+    if (!Object.keys(settingsUpdate).length) {
+      return res.status(400).json({ message: "No valid settings provided" });
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      currentUserId,
+      { $set: settingsUpdate },
+      { new: true, runValidators: true }
+    ).select("settings");
+
+    if (!updatedUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    return res.json(updatedUser.settings || {});
+  } catch (err) {
+    return res.status(500).json({ message: "Error updating settings" });
+  }
+});
+
+// GET NOTIFICATION HISTORY (Protected)
+router.get("/notifications/history", verifyToken, async (req, res) => {
+  try {
+    const currentUserId = getUserIdFromPayload(req.payload);
+    const user = await User.findById(currentUserId).select("notificationHistory");
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    return res.json(user.notificationHistory || []);
+  } catch (err) {
+    return res.status(500).json({ message: "Error fetching notification history" });
+  }
+});
+
+// CLEAR NOTIFICATION HISTORY (Protected)
+router.delete("/notifications/history", verifyToken, async (req, res) => {
+  try {
+    const currentUserId = getUserIdFromPayload(req.payload);
+    await User.findByIdAndUpdate(currentUserId, { $set: { notificationHistory: [] } });
+    return res.json({ message: "Notification history cleared" });
+  } catch (err) {
+    return res.status(500).json({ message: "Error clearing notification history" });
+  }
+});
+
+// GET CONCERT WISHLIST (Protected)
+router.get("/concert-wishlist", verifyToken, async (req, res) => {
+  try {
+    const currentUserId = getUserIdFromPayload(req.payload);
+    const user = await User.findById(currentUserId).select("concertWishlist");
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    return res.json(user.concertWishlist || []);
+  } catch (err) {
+    return res.status(500).json({ message: "Error fetching wishlist" });
+  }
+});
+
+// ADD CONCERT TO WISHLIST (Protected)
+router.post("/concert-wishlist", verifyToken, async (req, res) => {
+  try {
+    const currentUserId = getUserIdFromPayload(req.payload);
+    const concertId = String(req.body?.concertId || "").trim();
+    const name = String(req.body?.name || "").trim();
+
+    if (!concertId || !name) {
+      return res.status(400).json({ message: "concertId and name are required" });
+    }
+
+    const user = await User.findById(currentUserId).select("concertWishlist");
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const exists = (user.concertWishlist || []).some((item) => String(item.concertId) === concertId);
+    if (exists) {
+      return res.status(400).json({ message: "Concert already saved" });
+    }
+
+    await User.findByIdAndUpdate(currentUserId, {
+      $push: {
+        concertWishlist: {
+          concertId,
+          name,
+          image: req.body?.image || null,
+          date: req.body?.date || null,
+          city: req.body?.city || "",
+          venue: req.body?.venue || "",
+          url: req.body?.url || "",
+          savedAt: new Date()
+        }
+      }
+    });
+
+    const updated = await User.findById(currentUserId).select("concertWishlist");
+    return res.json(updated?.concertWishlist || []);
+  } catch (err) {
+    return res.status(500).json({ message: "Error saving concert" });
+  }
+});
+
+// REMOVE CONCERT FROM WISHLIST (Protected)
+router.delete("/concert-wishlist/:concertId", verifyToken, async (req, res) => {
+  try {
+    const currentUserId = getUserIdFromPayload(req.payload);
+    const concertId = String(req.params?.concertId || "").trim();
+    await User.findByIdAndUpdate(currentUserId, { $pull: { concertWishlist: { concertId } } });
+
+    const updated = await User.findById(currentUserId).select("concertWishlist");
+    return res.json(updated?.concertWishlist || []);
+  } catch (err) {
+    return res.status(500).json({ message: "Error removing concert" });
+  }
+});
+
 // SEARCH USERS (Protected)
-router.get("/search", verifyToken, async (req, res) => {
+router.get("/search", verifyToken, searchLimiter, async (req, res) => {
   try {
     const currentUserId = getUserIdFromPayload(req.payload);
     const query = String(req.query.q || "").trim();
+    const genre = String(req.query.genre || "").trim().toLowerCase();
 
-    if (!query) {
+    if (!query && !genre) {
       return res.json([]);
     }
 
-    const regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-    const currentUser = await User.findById(currentUserId).select("friends friendRequests sentFriendRequests");
+    const searchFilter = {
+      _id: { $ne: currentUserId }
+    };
+
+    // Add query-based search if provided
+    if (query) {
+      const regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      searchFilter.$or = [{ username: regex }, { email: regex }];
+    }
+
+    // Add genre filter if provided
+    if (genre) {
+      searchFilter.musicGenre = genre;
+    }
+
+    const currentUser = await User.findById(currentUserId).select("friends friendRequests sentFriendRequests blockedUsers");
     const friendIds = new Set((currentUser?.friends || []).map((id) => String(id)));
     const sentIds = new Set((currentUser?.sentFriendRequests || []).map((id) => String(id)));
     const requestFromIds = new Set((currentUser?.friendRequests || []).map((id) => String(id)));
+    const blockedIds = new Set((currentUser?.blockedUsers || []).map((id) => String(id)));
 
-    const users = await User.find({
-      _id: { $ne: currentUserId },
-      $or: [{ username: regex }, { email: regex }],
-    })
-      .select("_id username email imageUrl instagramUrl spotifyUrl")
+    // Filter out blocked users from search results
+    const users = await User.find(searchFilter)
+      .select("_id username email imageUrl instagramUrl spotifyUrl bio musicGenre")
       .limit(12);
 
-    const withFriendStatus = users.map((user) => ({
-      ...user.toObject(),
-      isFriend: friendIds.has(String(user._id)),
-      friendRequestStatus: friendIds.has(String(user._id))
-        ? "friends"
-        : sentIds.has(String(user._id))
-          ? "sent"
-          : requestFromIds.has(String(user._id))
-            ? "received"
-            : "none",
-    }));
+    const withFriendStatus = users
+      .filter((user) => !blockedIds.has(String(user._id)))
+      .map((user) => {
+        const userData = user.toObject();
+        userData.email = maskEmail(userData.email);
+
+        return {
+          ...userData,
+          isFriend: friendIds.has(String(user._id)),
+          friendRequestStatus: friendIds.has(String(user._id))
+            ? "friends"
+            : sentIds.has(String(user._id))
+              ? "sent"
+              : requestFromIds.has(String(user._id))
+                ? "received"
+                : "none",
+        };
+      });
 
     res.json(withFriendStatus);
   } catch (err) {
@@ -99,23 +314,56 @@ router.get("/notifications", verifyToken, async (req, res) => {
 });
 
 // GET USER PUBLIC PROFILE (Protected)
-router.get("/:id", verifyToken, async (req, res) => {
+router.get("/friends", verifyToken, async (req, res) => {
   try {
     const currentUserId = getUserIdFromPayload(req.payload);
-    const currentUser = await User.findById(currentUserId).select("friends friendRequests sentFriendRequests");
+    const currentUser = await User.findById(currentUserId)
+      .populate("friends", "_id username imageUrl lastSeen")
+      .select("friends");
+
     if (!currentUser) {
       return res.status(404).json({ message: "Current user not found" });
     }
 
-    const user = await User.findById(req.params.id).select("_id username email imageUrl instagramUrl spotifyUrl");
+    const friends = (currentUser.friends || []).map((friend) => {
+      const isOnline = presenceStore.isOnline(friend._id);
+      return {
+        _id: friend._id,
+        username: friend.username,
+        imageUrl: friend.imageUrl,
+        isOnline,
+        lastSeen: friend.lastSeen ? new Date(friend.lastSeen).getTime() : null,
+      };
+    });
+
+    return res.json(friends);
+  } catch (err) {
+    return res.status(500).json({ message: "Error fetching friends" });
+  }
+});
+
+// GET USER PUBLIC PROFILE (Protected)
+router.get("/:id", verifyToken, async (req, res) => {
+  try {
+    const currentUserId = getUserIdFromPayload(req.payload);
+    const currentUser = await User.findById(currentUserId).select("friends friendRequests sentFriendRequests blockedUsers");
+    if (!currentUser) {
+      return res.status(404).json({ message: "Current user not found" });
+    }
+
+    const user = await User.findById(req.params.id).select("_id username email imageUrl instagramUrl spotifyUrl bio");
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
     const targetId = String(user._id);
     const isFriend = currentUser.friends.some((friendId) => String(friendId) === targetId);
+    const isBlocked = (currentUser.blockedUsers || []).some((id) => String(id) === targetId);
     const friendRequestStatus = getFriendRequestStatus(currentUser, targetId);
-    res.json({ ...user.toObject(), isFriend, friendRequestStatus });
+    const profile = user.toObject();
+    profile.email = maskEmail(profile.email);
+
+    res.json({ ...profile, isFriend, friendRequestStatus, isBlocked });
   } catch (err) {
     res.status(500).json({ message: "Error fetching user profile" });
   }
@@ -135,12 +383,16 @@ router.post("/:id/friend", verifyToken, async (req, res) => {
       return res.status(400).json({ message: "You cannot add yourself as a friend" });
     }
 
-    const targetUser = await User.findById(targetUserId);
+    const targetUser = await User.findById(targetUserId).select("friendRequests settings");
     if (!targetUser) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    const currentUser = await User.findById(currentUserId).select("friends sentFriendRequests");
+    if (targetUser?.settings?.allowFriendRequests === false) {
+      return res.status(403).json({ message: "This user is not accepting friend requests" });
+    }
+
+    const currentUser = await User.findById(currentUserId).select("friends sentFriendRequests username imageUrl");
     if (!currentUser) {
       return res.status(404).json({ message: "Current user not found" });
     }
@@ -159,6 +411,11 @@ router.post("/:id/friend", verifyToken, async (req, res) => {
 
     await User.findByIdAndUpdate(targetUserId, { $addToSet: { friendRequests: currentUserId } });
     await User.findByIdAndUpdate(currentUserId, { $addToSet: { sentFriendRequests: targetUserId } });
+    await appendNotification(targetUserId, {
+      type: "friend-request",
+      title: "New friend request",
+      body: `${currentUser.username} sent you a friend request.`
+    });
 
     // Emit socket event to target user
     socketInstance.getIo()?.to(`notifications:${targetUserId}`).emit("friend-request:new", {
@@ -173,6 +430,118 @@ router.post("/:id/friend", verifyToken, async (req, res) => {
   }
 });
 
+// UNFRIEND USER (Protected)
+router.post("/:id/unfriend", verifyToken, async (req, res) => {
+  try {
+    const currentUserId = getUserIdFromPayload(req.payload);
+    const targetUserId = String(req.params.id || "").trim();
+
+    if (!targetUserId) {
+      return res.status(400).json({ message: "Target user is required" });
+    }
+
+    if (currentUserId === targetUserId) {
+      return res.status(400).json({ message: "You cannot unfriend yourself" });
+    }
+
+    const currentUser = await User.findById(currentUserId).select("friends");
+    const targetUser = await User.findById(targetUserId).select("friends");
+
+    if (!currentUser || !targetUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    await User.findByIdAndUpdate(currentUserId, { $pull: { friends: targetUserId } });
+    await User.findByIdAndUpdate(targetUserId, { $pull: { friends: currentUserId } });
+
+    res.json({ message: "Friend removed" });
+  } catch (err) {
+    res.status(500).json({ message: "Error removing friend" });
+  }
+});
+
+// BLOCK USER (Protected)
+router.post("/:id/block", verifyToken, async (req, res) => {
+  try {
+    const currentUserId = getUserIdFromPayload(req.payload);
+    const targetUserId = String(req.params.id || "").trim();
+
+    if (!targetUserId) {
+      return res.status(400).json({ message: "Target user is required" });
+    }
+
+    if (currentUserId === targetUserId) {
+      return res.status(400).json({ message: "You cannot block yourself" });
+    }
+
+    const targetUser = await User.findById(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const currentUser = await User.findById(currentUserId).select("blockedUsers friends");
+    if (!currentUser) {
+      return res.status(404).json({ message: "Current user not found" });
+    }
+
+    const isBlocked = (currentUser.blockedUsers || []).some((id) => String(id) === targetUserId);
+    if (isBlocked) {
+      return res.status(400).json({ message: "User is already blocked" });
+    }
+
+    // Block user
+    await User.findByIdAndUpdate(currentUserId, { $addToSet: { blockedUsers: targetUserId } });
+
+    // Remove from friends if they were friends
+    if (currentUser.friends?.some((id) => String(id) === targetUserId)) {
+      await User.findByIdAndUpdate(currentUserId, { $pull: { friends: targetUserId } });
+      await User.findByIdAndUpdate(targetUserId, { $pull: { friends: currentUserId } });
+    }
+
+    res.json({ message: "User blocked" });
+  } catch (err) {
+    res.status(500).json({ message: "Error blocking user" });
+  }
+});
+
+// UNBLOCK USER (Protected)
+router.post("/:id/unblock", verifyToken, async (req, res) => {
+  try {
+    const currentUserId = getUserIdFromPayload(req.payload);
+    const targetUserId = String(req.params.id || "").trim();
+
+    if (!targetUserId) {
+      return res.status(400).json({ message: "Target user is required" });
+    }
+
+    if (currentUserId === targetUserId) {
+      return res.status(400).json({ message: "You cannot unblock yourself" });
+    }
+
+    const targetUser = await User.findById(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const currentUser = await User.findById(currentUserId).select("blockedUsers");
+    if (!currentUser) {
+      return res.status(404).json({ message: "Current user not found" });
+    }
+
+    const isBlocked = (currentUser.blockedUsers || []).some((id) => String(id) === targetUserId);
+    if (!isBlocked) {
+      return res.status(400).json({ message: "User is not blocked" });
+    }
+
+    // Unblock user
+    await User.findByIdAndUpdate(currentUserId, { $pull: { blockedUsers: targetUserId } });
+
+    res.json({ message: "User unblocked" });
+  } catch (err) {
+    res.status(500).json({ message: "Error unblocking user" });
+  }
+});
+
 // RESPOND TO FRIEND REQUEST (Protected)
 router.post("/friend-requests/:requesterId/:action", verifyToken, async (req, res) => {
   try {
@@ -184,7 +553,7 @@ router.post("/friend-requests/:requesterId/:action", verifyToken, async (req, re
       return res.status(400).json({ message: "Action must be accept or decline" });
     }
 
-    const currentUser = await User.findById(currentUserId).select("friendRequests");
+    const currentUser = await User.findById(currentUserId).select("friendRequests username imageUrl");
     if (!currentUser) {
       return res.status(404).json({ message: "Current user not found" });
     }
@@ -236,9 +605,10 @@ router.post("/group-invites", verifyToken, async (req, res) => {
       return res.status(400).json({ message: "You cannot invite yourself" });
     }
 
-    const [targetUser, group] = await Promise.all([
+    const [targetUser, group, currentUser] = await Promise.all([
       User.findById(targetUserId).select("_id groupInvites"),
       Group.findById(groupId),
+      User.findById(currentUserId).select("_id username"),
     ]);
 
     if (!targetUser) {
@@ -247,6 +617,10 @@ router.post("/group-invites", verifyToken, async (req, res) => {
 
     if (!group) {
       return res.status(404).json({ message: "Group not found" });
+    }
+
+    if (!currentUser) {
+      return res.status(404).json({ message: "Current user not found" });
     }
 
     if (!group.isPrivate) {
@@ -271,13 +645,17 @@ router.post("/group-invites", verifyToken, async (req, res) => {
     await User.findByIdAndUpdate(targetUserId, {
       $push: { groupInvites: { group: groupId, invitedBy: currentUserId } }
     });
+    await appendNotification(targetUserId, {
+      type: "group-invite",
+      title: "Private group invite",
+      body: `${currentUser.username} invited you to ${group.name}.`
+    });
 
     // Emit socket event to target user
     socketInstance.getIo()?.to(`notifications:${targetUserId}`).emit("group-invite:new", {
       groupId: groupId,
       groupName: group.name,
       invitedBy: currentUserId,
-      inviterName: currentUser.username,
       inviterName: currentUser?.username,
     });
 

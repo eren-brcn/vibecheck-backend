@@ -3,6 +3,7 @@ const User = require("../models/User.model");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { verifyToken } = require("../middlewares/auth.middlewares");
+const { authLimiter } = require("../middlewares/rate-limiters");
 
 const isHttpUrl = (value) => {
   try {
@@ -46,7 +47,7 @@ const validateSocialUrl = (url, platform) => {
 };
 
 // SIGNUP ROUTE
-router.post("/signup", async (req, res) => {
+router.post("/signup", authLimiter, async (req, res) => {
   try {
     const { username, email, password } = req.body;
 
@@ -68,7 +69,7 @@ router.post("/signup", async (req, res) => {
 });
 
 // LOGIN ROUTE
-router.post("/login", async (req, res) => {
+router.post("/login", authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
     const jwtSecret = process.env.JWT_SECRET || process.env.TOKEN_SECRET;
@@ -125,7 +126,7 @@ router.get("/me", verifyToken, async (req, res) => {
 router.put("/me", verifyToken, async (req, res) => {
   try {
     const userId = req.payload?._id || req.payload?.id;
-    const { username, instagramUrl, spotifyUrl } = req.body;
+    const { username, bio, musicGenre, instagramUrl, spotifyUrl } = req.body;
 
     if (!userId) {
       return res.status(401).json({ message: "Invalid token payload" });
@@ -139,6 +140,16 @@ router.put("/me", verifyToken, async (req, res) => {
         return res.status(400).json({ message: "Username cannot be empty" });
       }
       updates.username = trimmedUsername;
+    }
+
+    if (typeof bio === "string") {
+      const trimmedBio = bio.trim();
+      updates.bio = trimmedBio || null;
+    }
+
+    if (typeof musicGenre === "string") {
+      const trimmedGenre = musicGenre.trim().toLowerCase();
+      updates.musicGenre = trimmedGenre || null;
     }
 
     if (typeof instagramUrl === "string") {
@@ -215,6 +226,46 @@ router.put("/me/photo", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("/auth/me/photo error:", err);
     res.status(500).json({ message: "Error updating profile photo" });
+  }
+});
+
+// CHANGE PASSWORD (Protected)
+router.post("/change-password", verifyToken, async (req, res) => {
+  try {
+    const userId = req.payload?._id || req.payload?.id;
+    const { oldPassword, newPassword } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({ message: "Invalid token payload" });
+    }
+
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ message: "Old and new passwords are required" });
+    }
+
+    if (oldPassword === newPassword) {
+      return res.status(400).json({ message: "New password must be different from old password" });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const isPasswordCorrect = await bcrypt.compare(oldPassword, user.password);
+    if (!isPasswordCorrect) {
+      return res.status(401).json({ message: "Old password is incorrect" });
+    }
+
+    const salt = bcrypt.genSaltSync(10);
+    const hashedPassword = bcrypt.hashSync(newPassword, salt);
+
+    await User.findByIdAndUpdate(userId, { password: hashedPassword });
+
+    res.json({ message: "Password changed successfully" });
+  } catch (err) {
+    console.error("/auth/change-password error:", err);
+    res.status(500).json({ message: "Error changing password" });
   }
 });
 

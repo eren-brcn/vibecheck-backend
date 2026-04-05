@@ -26,6 +26,7 @@ router.get("/my-groups", verifyToken, async (req, res) => {
       $or: [{ members: userId }, { organiser: userId }]
     })
       .populate("members", "username email imageUrl")
+      .populate("moderators", "_id username imageUrl")
       .populate("organiser", "_id");
     res.json(myGroups);
   } catch (err) {
@@ -41,7 +42,9 @@ router.get("/:id", verifyToken, async (req, res) => {
       return res.status(401).json({ message: "Invalid token payload" });
     }
 
-    const group = await Group.findById(req.params.id).populate("members", "username email imageUrl");
+    const group = await Group.findById(req.params.id)
+      .populate("members", "username email imageUrl")
+      .populate("moderators", "_id username imageUrl");
     if (!group) return res.status(404).json({ message: "Group not found" });
 
     if (group.isPrivate) {
@@ -71,6 +74,7 @@ router.post("/", verifyToken, async (req, res) => {
       isPrivate: privateGroup,
       inviteCode: privateGroup ? generateInviteCode() : null,
       organiser: req.payload._id, // Set the creator as the organiser
+      moderators: [],
       members: []
     });
     res.status(201).json(newGroup);
@@ -153,7 +157,7 @@ router.put("/leave/:id", verifyToken, async (req, res) => {
 
     const updated = await Group.findByIdAndUpdate(
       req.params.id,
-      { $pull: { members: currentUserId } },
+      { $pull: { members: currentUserId, moderators: currentUserId } },
       { new: true }
     );
 
@@ -176,14 +180,25 @@ router.put("/kick/:groupId/:userId", verifyToken, async (req, res) => {
     const group = await Group.findById(groupId);
     if (!group) return res.status(404).json({ message: "Group not found" });
 
-    // Security check: Only the organiser can perform this action
+    // Security check: organiser or moderator can kick members
     const kickRequesterId = String(req.payload._id || req.payload.id);
-    if (group.organiser.toString() !== kickRequesterId) {
-      return res.status(403).json({ message: "Only the organiser can kick members!" });
+    const isOrganiser = group.organiser.toString() === kickRequesterId;
+    const isModerator = (group.moderators || []).some((id) => String(id) === kickRequesterId);
+    if (!isOrganiser && !isModerator) {
+      return res.status(403).json({ message: "Only organiser or moderators can kick members" });
+    }
+
+    const targetIsOrganiser = group.organiser.toString() === String(userId);
+    const targetIsModerator = (group.moderators || []).some((id) => String(id) === String(userId));
+    if (targetIsOrganiser) {
+      return res.status(403).json({ message: "Cannot kick organiser" });
+    }
+    if (!isOrganiser && targetIsModerator) {
+      return res.status(403).json({ message: "Moderators cannot kick other moderators" });
     }
     
     // Perform the kick
-    const updated = await Group.findByIdAndUpdate(groupId, { $pull: { members: userId } }, { new: true });
+    const updated = await Group.findByIdAndUpdate(groupId, { $pull: { members: userId, moderators: userId } }, { new: true });
 
     if (updated && updated.members.length === 0) {
       await Group.findByIdAndDelete(groupId);
@@ -196,7 +211,48 @@ router.put("/kick/:groupId/:userId", verifyToken, async (req, res) => {
   }
 });
 
-// 9. DELETE ALL MY GROUPS (Organiser Only — bulk)
+// 9. PROMOTE MEMBER TO MODERATOR (Organiser Only)
+router.put("/moderators/:groupId/:userId/promote", verifyToken, async (req, res) => {
+  try {
+    const { groupId, userId } = req.params;
+    const requesterId = String(req.payload._id || req.payload.id);
+    const group = await Group.findById(groupId);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+    if (String(group.organiser) !== requesterId) {
+      return res.status(403).json({ message: "Only organiser can manage moderators" });
+    }
+
+    const isMember = (group.members || []).some((id) => String(id) === String(userId));
+    if (!isMember) {
+      return res.status(400).json({ message: "User must be a group member" });
+    }
+
+    await Group.findByIdAndUpdate(groupId, { $addToSet: { moderators: userId } });
+    return res.json({ message: "Moderator promoted" });
+  } catch (err) {
+    return res.status(500).json({ message: "Error promoting moderator" });
+  }
+});
+
+// 10. DEMOTE MODERATOR (Organiser Only)
+router.put("/moderators/:groupId/:userId/demote", verifyToken, async (req, res) => {
+  try {
+    const { groupId, userId } = req.params;
+    const requesterId = String(req.payload._id || req.payload.id);
+    const group = await Group.findById(groupId);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+    if (String(group.organiser) !== requesterId) {
+      return res.status(403).json({ message: "Only organiser can manage moderators" });
+    }
+
+    await Group.findByIdAndUpdate(groupId, { $pull: { moderators: userId } });
+    return res.json({ message: "Moderator demoted" });
+  } catch (err) {
+    return res.status(500).json({ message: "Error demoting moderator" });
+  }
+});
+
+// 11. DELETE ALL MY GROUPS (Organiser Only — bulk)
 router.delete("/mine/all", verifyToken, async (req, res) => {
   try {
     const userId = String(req.payload._id || req.payload.id);
@@ -207,7 +263,7 @@ router.delete("/mine/all", verifyToken, async (req, res) => {
   }
 });
 
-// 10. DELETE GROUP (Organizer Only)
+// 12. DELETE GROUP (Organizer Only)
 router.delete("/:id", verifyToken, async (req, res) => {
   try {
     const requesterId = String(req.payload._id || req.payload.id);
