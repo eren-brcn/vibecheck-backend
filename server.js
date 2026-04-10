@@ -43,6 +43,19 @@ const io = new Server(server, {
 const socketInstance = require('./socket-instance');
 socketInstance.setIo(io);
 
+const runDataMigrations = async () => {
+    await connectDB();
+
+    const result = await User.updateMany(
+        { notificationHistory: { $exists: true } },
+        { $unset: { notificationHistory: "" } }
+    );
+
+    if (result.modifiedCount > 0) {
+        console.log(`Migration: removed legacy notificationHistory from ${result.modifiedCount} user(s).`);
+    }
+};
+
 const getSocketToken = (socket) => {
     const authToken = socket.handshake?.auth?.token;
     if (typeof authToken === "string" && authToken.trim()) {
@@ -76,6 +89,7 @@ const emitPresenceForUserAndFriends = async (userId, isOnline) => {
 };
 
 io.use((socket, next) => {
+    (async () => {
     try {
         const token = getSocketToken(socket);
         if (!token) {
@@ -93,11 +107,18 @@ io.use((socket, next) => {
             return next(new Error("Unauthorized"));
         }
 
+        await connectDB();
+        const user = await User.findById(userId).select("isActive");
+        if (!user || user.isActive === false) {
+            return next(new Error("Unauthorized"));
+        }
+
         socket.data.userId = userId;
         return next();
     } catch {
         return next(new Error("Unauthorized"));
     }
+    })();
 });
 
 io.on("connection", (socket) => {
@@ -183,21 +204,6 @@ io.on("connection", (socket) => {
             // Emit message notification to recipient
             if (recipientId && !groupId) {
                 const senderName = (await User.findById(author).select("username"))?.username || "User";
-                await User.findByIdAndUpdate(recipientId, {
-                    $push: {
-                        notificationHistory: {
-                            $each: [{
-                                type: "message",
-                                title: `Message from ${senderName}`,
-                                body: safeContent,
-                                createdAt: new Date()
-                            }],
-                            $position: 0,
-                            $slice: 100
-                        }
-                    }
-                });
-
                 io.to(`notifications:${recipientId}`).emit("message:new", {
                     fromUser: senderName,
                     content: safeContent
@@ -259,6 +265,10 @@ handleErrors(app);
 
 // 9. Defines the server port (default: 5005)
 const PORT = process.env.PORT || 5005;
+
+runDataMigrations().catch((err) => {
+    console.error("Data migration failed:", err);
+});
 
 // 10. Optional for serverless deployments like Vercel.
 server.listen(PORT, () => {

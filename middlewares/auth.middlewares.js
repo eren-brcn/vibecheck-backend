@@ -1,6 +1,7 @@
 const jwt = require("jsonwebtoken")
+const User = require("../models/User.model");
 
-function verifyToken(req, res, next) {
+async function verifyToken(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
     const token = authHeader && authHeader.startsWith("Bearer ")
@@ -19,6 +20,16 @@ function verifyToken(req, res, next) {
     const payload = jwt.verify(token, secret);
     if (!payload._id && payload.id) {
       payload._id = payload.id;
+    }
+
+    const userId = String(payload._id || payload.id || "").trim();
+    const user = await User.findById(userId).select("isActive");
+    if (!user) {
+      return res.status(401).json({ errorMessage: "User not found" });
+    }
+
+    if (user.isActive === false) {
+      return res.status(403).json({ errorMessage: "Account is deactivated" });
     }
     
     // we extract the payload from the token and pass it to the route inside the request.

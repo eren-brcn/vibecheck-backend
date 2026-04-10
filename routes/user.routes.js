@@ -32,28 +32,6 @@ const getFriendRequestStatus = (viewer, targetUserId) => {
   return "none";
 };
 
-const appendNotification = async (userId, payload) => {
-  const title = String(payload?.title || "Notification").trim();
-  if (!title) {
-    return;
-  }
-
-  await User.findByIdAndUpdate(userId, {
-    $push: {
-      notificationHistory: {
-        $each: [{
-          type: payload?.type || "event",
-          title,
-          body: String(payload?.body || "").trim(),
-          createdAt: new Date()
-        }],
-        $position: 0,
-        $slice: 100
-      }
-    }
-  });
-};
-
 // GET USER SETTINGS (Protected)
 router.get("/settings", verifyToken, async (req, res) => {
   try {
@@ -108,33 +86,6 @@ router.put("/settings", verifyToken, async (req, res) => {
     return res.json(updatedUser.settings || {});
   } catch (err) {
     return res.status(500).json({ message: "Error updating settings" });
-  }
-});
-
-// GET NOTIFICATION HISTORY (Protected)
-router.get("/notifications/history", verifyToken, async (req, res) => {
-  try {
-    const currentUserId = getUserIdFromPayload(req.payload);
-    const user = await User.findById(currentUserId).select("notificationHistory");
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    return res.json(user.notificationHistory || []);
-  } catch (err) {
-    return res.status(500).json({ message: "Error fetching notification history" });
-  }
-});
-
-// CLEAR NOTIFICATION HISTORY (Protected)
-router.delete("/notifications/history", verifyToken, async (req, res) => {
-  try {
-    const currentUserId = getUserIdFromPayload(req.payload);
-    await User.findByIdAndUpdate(currentUserId, { $set: { notificationHistory: [] } });
-    return res.json({ message: "Notification history cleared" });
-  } catch (err) {
-    return res.status(500).json({ message: "Error clearing notification history" });
   }
 });
 
@@ -411,11 +362,6 @@ router.post("/:id/friend", verifyToken, async (req, res) => {
 
     await User.findByIdAndUpdate(targetUserId, { $addToSet: { friendRequests: currentUserId } });
     await User.findByIdAndUpdate(currentUserId, { $addToSet: { sentFriendRequests: targetUserId } });
-    await appendNotification(targetUserId, {
-      type: "friend-request",
-      title: "New friend request",
-      body: `${currentUser.username} sent you a friend request.`
-    });
 
     // Emit socket event to target user
     socketInstance.getIo()?.to(`notifications:${targetUserId}`).emit("friend-request:new", {
@@ -644,11 +590,6 @@ router.post("/group-invites", verifyToken, async (req, res) => {
 
     await User.findByIdAndUpdate(targetUserId, {
       $push: { groupInvites: { group: groupId, invitedBy: currentUserId } }
-    });
-    await appendNotification(targetUserId, {
-      type: "group-invite",
-      title: "Private group invite",
-      body: `${currentUser.username} invited you to ${group.name}.`
     });
 
     // Emit socket event to target user

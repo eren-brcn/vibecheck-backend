@@ -4,6 +4,8 @@ const userSchema = new Schema({
   username: { type: String, required: true },
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
+  isActive: { type: Boolean, default: true },
+  deactivatedAt: { type: Date, default: null },
   imageUrl: { type: String, default: null },
   bio: { type: String, default: null, maxlength: 500 },
   musicGenre: { type: String, default: null },
@@ -23,14 +25,6 @@ const userSchema = new Schema({
     notifyOnGroupInvite: { type: Boolean, default: true },
     theme: { type: String, enum: ["dark", "light"], default: "dark" }
   },
-  notificationHistory: [
-    {
-      type: { type: String, default: "event" },
-      title: { type: String, required: true },
-      body: { type: String, default: "" },
-      createdAt: { type: Date, default: Date.now }
-    }
-  ],
   concertWishlist: [
     {
       concertId: { type: String, required: true },

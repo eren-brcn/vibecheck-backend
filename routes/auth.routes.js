@@ -83,6 +83,10 @@ router.post("/login", authLimiter, async (req, res) => {
       return res.status(401).json({ message: "User not found" });
     }
 
+    if (foundUser.isActive === false) {
+      return res.status(403).json({ message: "This account is deactivated" });
+    }
+
     const isPasswordCorrect = await bcrypt.compare(password, foundUser.password);
     if (isPasswordCorrect) {
       // Create the token
@@ -266,6 +270,46 @@ router.post("/change-password", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("/auth/change-password error:", err);
     res.status(500).json({ message: "Error changing password" });
+  }
+});
+
+// DEACTIVATE ACCOUNT (Protected)
+router.post("/deactivate", verifyToken, async (req, res) => {
+  try {
+    const userId = req.payload?._id || req.payload?.id;
+    const password = String(req.body?.password || "");
+
+    if (!userId) {
+      return res.status(401).json({ message: "Invalid token payload" });
+    }
+
+    if (!password) {
+      return res.status(400).json({ message: "Password is required" });
+    }
+
+    const user = await User.findById(userId).select("password isActive");
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (user.isActive === false) {
+      return res.status(400).json({ message: "Account is already deactivated" });
+    }
+
+    const isPasswordCorrect = await bcrypt.compare(password, user.password);
+    if (!isPasswordCorrect) {
+      return res.status(401).json({ message: "Password is incorrect" });
+    }
+
+    await User.findByIdAndUpdate(userId, {
+      isActive: false,
+      deactivatedAt: new Date(),
+    });
+
+    return res.json({ message: "Account deactivated successfully" });
+  } catch (err) {
+    console.error("/auth/deactivate error:", err);
+    return res.status(500).json({ message: "Error deactivating account" });
   }
 });
 
